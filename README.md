@@ -49,7 +49,7 @@ jobs:
       context: .                      # Default: .
       build_args: |                   # Default: ""
         BP_VERSION=abc1234
-      enable_cache: true              # Default: false (GHA Docker layer cache)
+      enable_cache: false             # Default: true (GHA Docker layer cache)
       push_pr_images: false           # Default: false (skip push on PRs)
       semver_tagging: true            # Default: true (v-prefixed semver on prod)
       prod_branch: master             # Default: master
