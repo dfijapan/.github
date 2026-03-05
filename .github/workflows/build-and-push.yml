@@ -42,6 +42,11 @@ on:
         required: false
         type: string
         default: "master"
+      docker_secrets:
+        description: "Newline-separated Docker build secrets (e.g. 'github_token=TOKEN_VALUE')"
+        required: false
+        type: string
+        default: ""
     secrets:
       AZURE_CONTAINER_REGISTRY_SP_CLIENT_ID_DEV:
         required: true
@@ -184,6 +189,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             ${{ inputs.build_args }}
+          secrets: |
+            ${{ inputs.docker_secrets }}
           secret-files: |
             deploy_key=/tmp/deploy_key
           cache-from: ${{ inputs.enable_cache && 'type=gha' || '' }}
