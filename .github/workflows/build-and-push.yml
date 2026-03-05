@@ -1,0 +1,161 @@
+name: Build and Push to ACR
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: "Name of the Docker image (e.g. 'callcenter', 'fs_connector')"
+        required: true
+        type: string
+      dockerfile:
+        description: "Path to Dockerfile (relative to context)"
+        required: false
+        type: string
+        default: "Dockerfile"
+      context:
+        description: "Docker build context path"
+        required: false
+        type: string
+        default: "."
+      build_args:
+        description: "Newline-separated build args (e.g. 'KEY=value')"
+        required: false
+        type: string
+        default: ""
+      enable_cache:
+        description: "Enable GitHub Actions Docker layer cache"
+        required: false
+        type: boolean
+        default: false
+      semver_tagging:
+        description: "Enable semver tagging on prod branch (conventional commits)"
+        required: false
+        type: boolean
+        default: true
+      prod_branch:
+        description: "Branch name that triggers prod builds"
+        required: false
+        type: string
+        default: "master"
+    secrets:
+      AZURE_CONTAINER_REGISTRY_SP_CLIENT_ID_DEV:
+        required: true
+      AZURE_CONTAINER_REGISTRY_SP_CLIENT_SECRET_DEV:
+        required: true
+      AZURE_CONTAINER_REGISTRY_NAME_DEV:
+        required: true
+      AZURE_CONTAINER_REGISTRY_SP_CLIENT_ID_PROD:
+        required: true
+      AZURE_CONTAINER_REGISTRY_SP_CLIENT_SECRET_PROD:
+        required: true
+      AZURE_CONTAINER_REGISTRY_NAME_PROD:
+        required: true
+      DEPLOY_KEY:
+        description: "SSH deploy key for private dependencies (written to /tmp/deploy_key)"
+        required: false
+    outputs:
+      image_tag:
+        description: "The image tag that was pushed"
+        value: ${{ jobs.build.outputs.image_tag }}
+      image_url:
+        description: "Full image URL that was pushed"
+        value: ${{ jobs.build.outputs.image_url }}
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+      image_url: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.semver_tagging && 0 || 1 }}
+
+      - name: Get short git hash
+        id: git-hash
+        run: echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Get next version
+        id: version
+        if: inputs.semver_tagging && github.ref == format('refs/heads/{0}', inputs.prod_branch)
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ github.token }}
+          default_bump: patch
+          tag_prefix: "v"
+
+      - name: Determine environment and registry
+        id: set-env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/${{ inputs.prod_branch }}" ]]; then
+            echo "ENVIRONMENT=PROD" >> $GITHUB_OUTPUT
+            echo "AZ_REGISTRY=${{ secrets.AZURE_CONTAINER_REGISTRY_NAME_PROD }}.azurecr.io" >> $GITHUB_OUTPUT
+          else
+            echo "ENVIRONMENT=DEV" >> $GITHUB_OUTPUT
+            echo "AZ_REGISTRY=${{ secrets.AZURE_CONTAINER_REGISTRY_NAME_DEV }}.azurecr.io" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/${{ inputs.prod_branch }}" && "${{ inputs.semver_tagging }}" == "true" ]]; then
+            echo "tag=${{ steps.version.outputs.new_tag }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "tag=pr-${{ steps.git-hash.outputs.hash }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ steps.git-hash.outputs.hash }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ACR (Dev)
+        if: steps.set-env.outputs.ENVIRONMENT == 'DEV'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.set-env.outputs.AZ_REGISTRY }}
+          username: ${{ secrets.AZURE_CONTAINER_REGISTRY_SP_CLIENT_ID_DEV }}
+          password: ${{ secrets.AZURE_CONTAINER_REGISTRY_SP_CLIENT_SECRET_DEV }}
+
+      - name: Log in to ACR (Prod)
+        if: steps.set-env.outputs.ENVIRONMENT == 'PROD'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.set-env.outputs.AZ_REGISTRY }}
+          username: ${{ secrets.AZURE_CONTAINER_REGISTRY_SP_CLIENT_ID_PROD }}
+          password: ${{ secrets.AZURE_CONTAINER_REGISTRY_SP_CLIENT_SECRET_PROD }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.set-env.outputs.AZ_REGISTRY }}/${{ inputs.image_name }}
+          tags: |
+            type=raw,value=${{ steps.tag.outputs.tag }}
+
+      - name: Prepare deploy key
+        run: |
+          if [ -n "${{ secrets.DEPLOY_KEY }}" ]; then
+            echo "${{ secrets.DEPLOY_KEY }}" > /tmp/deploy_key
+          else
+            touch /tmp/deploy_key
+          fi
+          chmod 600 /tmp/deploy_key
+
+      - name: Build and Push Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ${{ inputs.build_args }}
+          secret-files: |
+            deploy_key=/tmp/deploy_key
+          cache-from: ${{ inputs.enable_cache && 'type=gha' || '' }}
+          cache-to: ${{ inputs.enable_cache && 'type=gha,mode=max' || '' }}
