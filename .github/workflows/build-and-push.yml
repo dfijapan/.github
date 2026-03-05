@@ -47,13 +47,9 @@ on:
         required: true
       AZURE_CONTAINER_REGISTRY_SP_CLIENT_SECRET_DEV:
         required: true
-      AZURE_CONTAINER_REGISTRY_NAME_DEV:
-        required: true
       AZURE_CONTAINER_REGISTRY_SP_CLIENT_ID_PROD:
         required: true
       AZURE_CONTAINER_REGISTRY_SP_CLIENT_SECRET_PROD:
-        required: true
-      AZURE_CONTAINER_REGISTRY_NAME_PROD:
         required: true
       DEPLOY_KEY:
         description: "SSH deploy key for private dependencies (written to /tmp/deploy_key)"
@@ -72,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.tag.outputs.tag }}
-      image_url: ${{ steps.meta.outputs.tags }}
+      image_url: ${{ steps.set-env.outputs.AZ_REGISTRY }}/${{ inputs.image_name }}:${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -94,16 +90,13 @@ jobs:
 
       - name: Determine environment and registry
         id: set-env
-        env:
-          ACR_NAME_PROD: ${{ secrets.AZURE_CONTAINER_REGISTRY_NAME_PROD }}
-          ACR_NAME_DEV: ${{ secrets.AZURE_CONTAINER_REGISTRY_NAME_DEV }}
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/${{ inputs.prod_branch }}" ]]; then
             echo "ENVIRONMENT=PROD" >> $GITHUB_OUTPUT
-            echo "AZ_REGISTRY=${ACR_NAME_PROD}.azurecr.io" >> $GITHUB_OUTPUT
+            echo "AZ_REGISTRY=${{ vars.AZURE_CONTAINER_REGISTRY_NAME_PROD }}.azurecr.io" >> $GITHUB_OUTPUT
           else
             echo "ENVIRONMENT=DEV" >> $GITHUB_OUTPUT
-            echo "AZ_REGISTRY=${ACR_NAME_DEV}.azurecr.io" >> $GITHUB_OUTPUT
+            echo "AZ_REGISTRY=${{ vars.AZURE_CONTAINER_REGISTRY_NAME_DEV }}.azurecr.io" >> $GITHUB_OUTPUT
           fi
 
       - name: Determine image tag
@@ -206,4 +199,4 @@ jobs:
           echo "| **Tag** | \`${{ steps.tag.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Pushed** | ${{ steps.push.outputs.push }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Environment** | ${{ steps.set-env.outputs.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Commit** | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
